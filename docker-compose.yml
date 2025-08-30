@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: rapidrelief-db
+    environment:
+      POSTGRES_DB: rapidrelief
+      POSTGRES_USER: rapidrelief_user
+      POSTGRES_PASSWORD: rapidrelief_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rapidrelief_user -d rapidrelief"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - rapidrelief-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rapidrelief-backend
+    environment:
+      - DATABASE_URL=postgresql://rapidrelief_user:rapidrelief_password@postgres:5432/rapidrelief
+      - GRANITE_API_KEY=${GRANITE_API_KEY:-TODO_REPLACE_WITH_ACTUAL_API_KEY}
+      - GRANITE_API_URL=${GRANITE_API_URL:-https://api.watsonx.ai/v1/text/generation}
+      - GRANITE_MODEL=${GRANITE_MODEL:-ibm/granite-13b-instruct-v2}
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./backend/reports:/app/reports
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - rapidrelief-network
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rapidrelief-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - rapidrelief-network
+    restart: unless-stopped
+
+  # Redis (for future caching/queuing)
+  redis:
+    image: redis:7-alpine
+    container_name: rapidrelief-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - rapidrelief-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  rapidrelief-network:
+    driver: bridge
